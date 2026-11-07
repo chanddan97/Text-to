@@ -37,9 +37,6 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -47,6 +44,9 @@ jobs:
 
       - name: Build Debug APK
         run: |
+          # Accept Android SDK licenses automatically using pre-installed SDK
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
           if [ -f "settings.gradle.kts" ] || [ -f "settings.gradle" ] || [ -d "app" ]; then
             echo "Building Native Android Project..."
             gradle wrapper
@@ -58,7 +58,7 @@ jobs:
             npm run build || true
             mkdir -p www_dir
             cp -r dist/* www_dir/ 2>/dev/null || cp -r build/* www_dir/ 2>/dev/null || cp *.html www_dir/ 2>/dev/null || true
-            npm install @capacitor/core @capacitor/cli @capacitor/android
+            npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
             npx cap init "VoiceStudio" "com.rajkumar.voicestudio" --web-dir www_dir
             npx cap add android
             cd android
@@ -68,14 +68,13 @@ jobs:
             mkdir -p ../app/build/outputs/apk/debug
             cp app/build/outputs/apk/debug/*.apk ../app/build/outputs/apk/debug/
           else
-            echo "ERROR: Unknown project structure inside ZIP!"
-            ls -R
+            echo "Project files found:"
+            ls -la
             exit 1
           fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Debug-APK
+          name: AI-Voice-Studio-Debug-APK
           path: app/build/outputs/apk/debug/*.apk
-          
