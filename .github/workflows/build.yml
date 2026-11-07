@@ -1,4 +1,4 @@
-name: Auto Unzip & Build Debug APK
+name: Smart Auto Unzip & Build Debug APK
 
 on:
   push:
@@ -13,23 +13,26 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Unzip Project Files (If ZIP uploaded)
+      - name: Safely Unzip Project (Handles spaces & brackets)
         run: |
-          if ls *.zip 1> /dev/null 2>&1; then
-            echo "Found ZIP file, extracting..."
-            unzip -o *.zip -d extracted_project
-            # Move files to root if they are inside a subfolder or directly in extracted_project
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Found ZIP file: $ZIP_FILE"
+            mkdir -p extracted_project
+            unzip -q -o "$ZIP_FILE" -d extracted_project
+            rm -f "$ZIP_FILE"
+            
+            # Find where the actual project files are inside extracted_project
             shopt -s dotglob
-            if [ -f "extracted_project/settings.gradle.kts" ] || [ -f "extracted_project/settings.gradle" ]; then
-              mv extracted_project/* .
+            SUBDIR=$(find extracted_project -maxdepth 2 \( -name "settings.gradle*" -o -name "package.json" -o -name "index.html" \) -printf '%h\n' | head -n 1)
+            if [ -n "$SUBDIR" ]; then
+              cp -rn "$SUBDIR"/* . || true
             else
-              SUBDIR=$(find extracted_project -maxdepth 2 -name "settings.gradle*" -printf '%h\n' | head -n 1)
-              if [ -n "$SUBDIR" ]; then
-                mv "$SUBDIR"/* .
-              fi
+              cp -rn extracted_project/* . || true
             fi
-            rm -rf extracted_project *.zip
+            rm -rf extracted_project
           fi
+          echo "--- Extracted Files in Root ---"
           ls -la
 
       - name: Set up JDK 17
@@ -38,23 +41,53 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Set up Node.js (If AI Studio exported Web/React bundle)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Setup Gradle & Build Debug APK
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.7'
-      
-      - name: Compile Debug APK
+      - name: Build Native or Hybrid Android Debug APK
         run: |
-          if [ -f "./gradlew" ]; then
+          # CASE 1: Native Android Project from AI Studio
+          if [ -f "settings.gradle.kts" ] || [ -f "settings.gradle" ] || [ -f "build.gradle.kts" ]; then
+            echo "Detected Native Android Gradle Project!"
+            gradle wrapper --gradle-version 8.7 || true
             chmod +x ./gradlew
             ./gradlew assembleDebug --stacktrace
+          
+          # CASE 2: Web/React Project from AI Studio -> Auto-convert to Native Android APK via Capacitor
           else
-            gradle wrapper --gradle-version 8.7
+            echo "Detected Web/React Project from AI Studio! Wrapping into Native Android APK..."
+            if [ -f "package.json" ]; then
+              npm install
+              npm run build || true
+            fi
+            
+            # Prepare web assets folder
+            mkdir -p www_assets
+            if [ -d "dist" ]; then
+              cp -r dist/* www_assets/
+            elif [ -d "build" ]; then
+              cp -r build/* www_assets/
+            else
+              find . -maxdepth 1 -not -name 'www_assets' -not -name '.*' -exec cp -r {} www_assets/ \; || true
+            fi
+
+            # Initialize Capacitor Android Wrapper
+            npm init -y
+            npm install @capacitor/core @capacitor/cli @capacitor/android
+            npx cap init "AI Voice Studio Pro" "com.rajkumar.voicestudio" --web-dir www_assets
+            npx cap add android
+            npx cap copy android
+
+            cd android
             chmod +x ./gradlew
             ./gradlew assembleDebug --stacktrace
+            mkdir -p ../app/build/outputs/apk/debug
+            cp app/build/outputs/apk/debug/*.apk ../app/build/outputs/apk/debug/
           fi
 
       - name: Upload Debug APK
