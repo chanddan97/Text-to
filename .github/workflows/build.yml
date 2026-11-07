@@ -13,22 +13,28 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Unzip AI Studio File
+      - name: Unzip AI Studio File (Including Hidden .env Files)
         run: |
+          shopt -s dotglob
           for f in *.zip; do
             if [ -f "$f" ]; then
               echo "Unzipping $f ..."
               unzip -o "$f" -d temp_dir
               rm -f "$f"
-              cp -r temp_dir/* . || true
+              cp -rn temp_dir/* . || true
               for d in temp_dir/*/; do
                 if [ -d "$d" ]; then
-                  cp -r "$d"* . || true
+                  cp -rn "$d"* . || true
                 fi
               done
               rm -rf temp_dir
             fi
           done
+          # Ensure .env.example and .env exist so Gradle never fails!
+          touch .env.example .env local.properties
+          if [ -d "app" ]; then
+            touch app/.env.example app/.env
+          fi
           ls -la
 
       - name: Set up JDK 17
@@ -44,34 +50,10 @@ jobs:
 
       - name: Build Debug APK
         run: |
-          # Accept Android SDK licenses automatically using pre-installed SDK
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-
-          if [ -f "settings.gradle.kts" ] || [ -f "settings.gradle" ] || [ -d "app" ]; then
-            echo "Building Native Android Project..."
-            gradle wrapper
-            chmod +x ./gradlew
-            ./gradlew assembleDebug --stacktrace
-          elif [ -f "package.json" ]; then
-            echo "Web Project Detected! Converting to Android APK..."
-            npm install
-            npm run build || true
-            mkdir -p www_dir
-            cp -r dist/* www_dir/ 2>/dev/null || cp -r build/* www_dir/ 2>/dev/null || cp *.html www_dir/ 2>/dev/null || true
-            npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
-            npx cap init "VoiceStudio" "com.rajkumar.voicestudio" --web-dir www_dir
-            npx cap add android
-            cd android
-            gradle wrapper
-            chmod +x ./gradlew
-            ./gradlew assembleDebug --stacktrace
-            mkdir -p ../app/build/outputs/apk/debug
-            cp app/build/outputs/apk/debug/*.apk ../app/build/outputs/apk/debug/
-          else
-            echo "Project files found:"
-            ls -la
-            exit 1
-          fi
+          gradle wrapper
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
