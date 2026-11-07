@@ -1,4 +1,4 @@
-name: Smart Auto Unzip & Build Debug APK
+name: Build Android APK
 
 on:
   push:
@@ -13,26 +13,22 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Safely Unzip Project (Handles spaces & brackets)
+      - name: Unzip AI Studio File
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
-          if [ -n "$ZIP_FILE" ]; then
-            echo "Found ZIP file: $ZIP_FILE"
-            mkdir -p extracted_project
-            unzip -q -o "$ZIP_FILE" -d extracted_project
-            rm -f "$ZIP_FILE"
-            
-            # Find where the actual project files are inside extracted_project
-            shopt -s dotglob
-            SUBDIR=$(find extracted_project -maxdepth 2 \( -name "settings.gradle*" -o -name "package.json" -o -name "index.html" \) -printf '%h\n' | head -n 1)
-            if [ -n "$SUBDIR" ]; then
-              cp -rn "$SUBDIR"/* . || true
-            else
-              cp -rn extracted_project/* . || true
+          for f in *.zip; do
+            if [ -f "$f" ]; then
+              echo "Unzipping $f ..."
+              unzip -o "$f" -d temp_dir
+              rm -f "$f"
+              cp -r temp_dir/* . || true
+              for d in temp_dir/*/; do
+                if [ -d "$d" ]; then
+                  cp -r "$d"* . || true
+                fi
+              done
+              rm -rf temp_dir
             fi
-            rm -rf extracted_project
-          fi
-          echo "--- Extracted Files in Root ---"
+          done
           ls -la
 
       - name: Set up JDK 17
@@ -41,58 +37,45 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Node.js (If AI Studio exported Web/React bundle)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build Native or Hybrid Android Debug APK
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build Debug APK
         run: |
-          # CASE 1: Native Android Project from AI Studio
-          if [ -f "settings.gradle.kts" ] || [ -f "settings.gradle" ] || [ -f "build.gradle.kts" ]; then
-            echo "Detected Native Android Gradle Project!"
-            gradle wrapper --gradle-version 8.7 || true
+          if [ -f "settings.gradle.kts" ] || [ -f "settings.gradle" ] || [ -d "app" ]; then
+            echo "Building Native Android Project..."
+            gradle wrapper
             chmod +x ./gradlew
             ./gradlew assembleDebug --stacktrace
-          
-          # CASE 2: Web/React Project from AI Studio -> Auto-convert to Native Android APK via Capacitor
-          else
-            echo "Detected Web/React Project from AI Studio! Wrapping into Native Android APK..."
-            if [ -f "package.json" ]; then
-              npm install
-              npm run build || true
-            fi
-            
-            # Prepare web assets folder
-            mkdir -p www_assets
-            if [ -d "dist" ]; then
-              cp -r dist/* www_assets/
-            elif [ -d "build" ]; then
-              cp -r build/* www_assets/
-            else
-              find . -maxdepth 1 -not -name 'www_assets' -not -name '.*' -exec cp -r {} www_assets/ \; || true
-            fi
-
-            # Initialize Capacitor Android Wrapper
-            npm init -y
+          elif [ -f "package.json" ]; then
+            echo "Web Project Detected! Converting to Android APK..."
+            npm install
+            npm run build || true
+            mkdir -p www_dir
+            cp -r dist/* www_dir/ 2>/dev/null || cp -r build/* www_dir/ 2>/dev/null || cp *.html www_dir/ 2>/dev/null || true
             npm install @capacitor/core @capacitor/cli @capacitor/android
-            npx cap init "AI Voice Studio Pro" "com.rajkumar.voicestudio" --web-dir www_assets
+            npx cap init "VoiceStudio" "com.rajkumar.voicestudio" --web-dir www_dir
             npx cap add android
-            npx cap copy android
-
             cd android
+            gradle wrapper
             chmod +x ./gradlew
             ./gradlew assembleDebug --stacktrace
             mkdir -p ../app/build/outputs/apk/debug
             cp app/build/outputs/apk/debug/*.apk ../app/build/outputs/apk/debug/
+          else
+            echo "ERROR: Unknown project structure inside ZIP!"
+            ls -R
+            exit 1
           fi
 
-      - name: Upload Debug APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AI-Voice-Studio-Debug-APK
+          name: Debug-APK
           path: app/build/outputs/apk/debug/*.apk
           
